@@ -189,3 +189,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Ignore model checkpointing
+*.pt
+models/*
+!models/.gitkeep
