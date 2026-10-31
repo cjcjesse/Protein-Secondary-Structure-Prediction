@@ -10,6 +10,7 @@ numpy==2.2.6
 matplotlib==3.10.8
 tqdm==4.67.1
 ipykernel==7.1.0
+ipywidgets
 ipython
 jupyterlab
 notebook

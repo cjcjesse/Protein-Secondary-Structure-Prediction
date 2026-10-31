@@ -90,62 +90,63 @@ def train_val_loop(train_loader, val_loader, d_model, nhead, num_layers, lr, dro
     val_epoch_losses = []
     acc_score = Accuracy(task='multiclass', num_classes=n_vocab, average='micro').to(device)
 
-    for epoch in tqdm(range(epochs), desc='Epochs', leave=False):
-        model.train()
-        train_loss = 0.0
-        val_loss = 0.0
-        train_total = 0
-        val_total = 0
+    with tqdm(range(epochs), desc='Epochs', leave=False) as pbar:
+        for epoch in pbar:
+            model.train()
+            train_loss = 0.0
+            val_loss = 0.0
+            train_total = 0
+            val_total = 0
 
-        for X, Y, pad in train_loader:
-            masked = Y != ignore_idx # bool mask where 1 if not padding or unmasked
-            if masked.sum() == 0:
-                continue # check if mini-batch by chance has no chosen position for masking/corrupting/retention, continue to next mini-batch if so
-
-            X, Y, pad = X.to(device), Y.to(device), pad.to(device) # (batch_size, max_len, d_model), (batch_size, max_len), (batch_size, max_len)
-            optimizer.zero_grad()
-            outputs = model(X, pad) # (batch_size, max_len, n_vocab)
-            loss = criterion(outputs.reshape(-1, n_vocab), Y.reshape(-1)) # reshape to: (batch_size * max_len, n_vocab), (batch_size * max_len, )
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-
-            train_loss += loss.item() * masked.sum().item()
-            train_total += masked.sum().item()
-
-        model.eval()
-        acc_score.reset()
-        with torch.no_grad():
-            generator.manual_seed(seed)
-            for X, Y, pad in val_loader:
+            for X, Y, pad in train_loader:
                 masked = Y != ignore_idx # bool mask where 1 if not padding or unmasked
                 if masked.sum() == 0:
                     continue # check if mini-batch by chance has no chosen position for masking/corrupting/retention, continue to next mini-batch if so
-                
+
                 X, Y, pad = X.to(device), Y.to(device), pad.to(device) # (batch_size, max_len, d_model), (batch_size, max_len), (batch_size, max_len)
+                optimizer.zero_grad()
                 outputs = model(X, pad) # (batch_size, max_len, n_vocab)
                 loss = criterion(outputs.reshape(-1, n_vocab), Y.reshape(-1)) # reshape to: (batch_size * max_len, n_vocab), (batch_size * max_len, )
-                preds = outputs.argmax(-1)
-    
-                val_loss += loss.item() * masked.sum().item()
-                val_total += masked.sum().item()
-                acc_score.update(preds[masked], Y[masked])
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
 
-        epoch_eval_metric = acc_score.compute().item()
-        train_epoch_loss = train_loss / train_total
-        val_epoch_loss = val_loss / val_total
-        train_epoch_losses.append(train_epoch_loss)
-        val_epoch_losses.append(val_epoch_loss)
+                train_loss += loss.item() * masked.sum().item()
+                train_total += masked.sum().item()
 
-        if (epoch == 0) or ((epoch + 1) % 5 == 0) or (epoch == (epochs - 1)):
-            print(f"Epoch: {epoch + 1}\n\tTrain Loss: {train_epoch_loss:.3f}\n\tVal Loss: {val_epoch_loss:.3f}\n\tMasked Token Accuracy: {epoch_eval_metric:.3f}\n")
+            model.eval()
+            acc_score.reset()
+            with torch.no_grad():
+                generator.manual_seed(seed)
+                for X, Y, pad in val_loader:
+                    masked = Y != ignore_idx # bool mask where 1 if not padding or unmasked
+                    if masked.sum() == 0:
+                        continue # check if mini-batch by chance has no chosen position for masking/corrupting/retention, continue to next mini-batch if so
+                    
+                    X, Y, pad = X.to(device), Y.to(device), pad.to(device) # (batch_size, max_len, d_model), (batch_size, max_len), (batch_size, max_len)
+                    outputs = model(X, pad) # (batch_size, max_len, n_vocab)
+                    loss = criterion(outputs.reshape(-1, n_vocab), Y.reshape(-1)) # reshape to: (batch_size * max_len, n_vocab), (batch_size * max_len, )
+                    preds = outputs.argmax(-1)
+        
+                    val_loss += loss.item() * masked.sum().item()
+                    val_total += masked.sum().item()
+                    acc_score.update(preds[masked], Y[masked])
 
-        if epoch_eval_metric > best_eval_metric:
-            best_eval_metric = epoch_eval_metric
-            best_epoch = epoch
-            torch.save(model.state_dict(), state_dict_path)
+            epoch_eval_metric = acc_score.compute().item()
+            train_epoch_loss = train_loss / train_total
+            val_epoch_loss = val_loss / val_total
+            train_epoch_losses.append(train_epoch_loss)
+            val_epoch_losses.append(val_epoch_loss)
 
-        scheduler.step(epoch_eval_metric)
+            if (epoch == 0) or ((epoch + 1) % 5 == 0) or (epoch == (epochs - 1)):
+                pbar.write(f"Epoch: {epoch + 1}\n\tTrain Loss: {train_epoch_loss:.3f}\n\tVal Loss: {val_epoch_loss:.3f}\n\tMasked Token Accuracy: {epoch_eval_metric:.3f}\n")
+
+            if epoch_eval_metric > best_eval_metric:
+                best_eval_metric = epoch_eval_metric
+                best_epoch = epoch
+                torch.save(model.state_dict(), state_dict_path)
+
+            scheduler.step(epoch_eval_metric)
 
     model.load_state_dict(torch.load(state_dict_path, weights_only=True))
 
@@ -164,9 +165,9 @@ def cnn_bilstm_objective(trial, train_loader, val_loader, weights_tensor, frozen
     try:
         torch.manual_seed(seed)
         
-        kernel_size = trial.suggest_categorical('kernel_size', [3, 5, 7, 9])
-        hidden_size = trial.suggest_categorical('hidden_size', [32, 64, 128])
-        conv_layers = trial.suggest_int('conv_layers', 1, 3)
+        kernel_size = trial.suggest_categorical('kernel_size', [3, 5, 7])
+        hidden_size = trial.suggest_categorical('hidden_size', [32, 64])
+        conv_layers = trial.suggest_int('conv_layers', 1, 2)
         lr = trial.suggest_float('lr', 1e-4, 2e-3, log=True)
         dropout = trial.suggest_float('dropout', 0.0, 0.5)
         weight_decay = trial.suggest_float('weight_decay', 1e-5, 1e-2, log=True)
@@ -234,73 +235,74 @@ def cnn_bilstm_train_val_loop(train_loader, val_loader, weights_tensor, frozen_e
     val_epoch_losses = []
     mcc_score = MatthewsCorrCoef(task='multiclass', num_classes=num_classes).to(device)
 
-    for epoch in tqdm(range(epochs), desc='Epochs', leave=False):
-        cnn_bilstm_tagger.train()
-        cnn_bilstm_tagger.encoder.eval()
-        train_loss = 0.0
-        val_loss = 0.0
-        #train_corrects = 0
-        val_corrects = 0
-        train_total = 0
-        val_total = 0
+    with tqdm(range(epochs), desc='Epochs', leave=False) as pbar:
+        for epoch in pbar:
+            cnn_bilstm_tagger.train()
+            cnn_bilstm_tagger.encoder.eval()
+            train_loss = 0.0
+            val_loss = 0.0
+            #train_corrects = 0
+            val_corrects = 0
+            train_total = 0
+            val_total = 0
 
-        for X, Y, lengths, is_padding in train_loader:
-            X, Y, lengths, is_padding = X.to(device), Y.to(device), lengths.to(device), is_padding.to(device)
-            optimizer.zero_grad()
-            outputs = cnn_bilstm_tagger(X, lengths, is_padding)
-            loss = criterion(outputs.reshape(-1, num_classes), Y.reshape(-1, )) # (batch_size * max_len, num_classes), (batch_size * max_len, )
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(cnn_bilstm_tagger.parameters(), max_norm=1.0)
-            optimizer.step()
-
-            scored = (Y != ignore_index)
-            n = scored.sum().item()
-            train_loss += loss.item() * n
-            preds = outputs.argmax(-1)
-            #train_corrects += preds[scored].eq(Y[scored]).sum().item()
-            train_total += n
-
-        cnn_bilstm_tagger.eval()
-        mcc_score.reset()
-        with torch.no_grad():
-            true_list = []
-            preds_list = []
-            for X, Y, lengths, is_padding in val_loader:
+            for X, Y, lengths, is_padding in train_loader:
                 X, Y, lengths, is_padding = X.to(device), Y.to(device), lengths.to(device), is_padding.to(device)
+                optimizer.zero_grad()
                 outputs = cnn_bilstm_tagger(X, lengths, is_padding)
                 loss = criterion(outputs.reshape(-1, num_classes), Y.reshape(-1, )) # (batch_size * max_len, num_classes), (batch_size * max_len, )
-                preds = outputs.argmax(-1)
-    
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(cnn_bilstm_tagger.parameters(), max_norm=1.0)
+                optimizer.step()
+
                 scored = (Y != ignore_index)
                 n = scored.sum().item()
-                val_loss += loss.item() * n
-                val_corrects += preds[scored].eq(Y[scored]).sum().item()
-                val_total += n
-                mcc_score.update(preds[scored], Y[scored])
+                train_loss += loss.item() * n
+                preds = outputs.argmax(-1)
+                #train_corrects += preds[scored].eq(Y[scored]).sum().item()
+                train_total += n
 
-                true_list.append(Y[scored].detach().cpu().numpy())
-                preds_list.append(preds[scored].detach().cpu().numpy())
+            cnn_bilstm_tagger.eval()
+            mcc_score.reset()
+            with torch.no_grad():
+                true_list = []
+                preds_list = []
+                for X, Y, lengths, is_padding in val_loader:
+                    X, Y, lengths, is_padding = X.to(device), Y.to(device), lengths.to(device), is_padding.to(device)
+                    outputs = cnn_bilstm_tagger(X, lengths, is_padding)
+                    loss = criterion(outputs.reshape(-1, num_classes), Y.reshape(-1, )) # (batch_size * max_len, num_classes), (batch_size * max_len, )
+                    preds = outputs.argmax(-1)
+        
+                    scored = (Y != ignore_index)
+                    n = scored.sum().item()
+                    val_loss += loss.item() * n
+                    val_corrects += preds[scored].eq(Y[scored]).sum().item()
+                    val_total += n
+                    mcc_score.update(preds[scored], Y[scored])
 
-        epoch_eval_metric = mcc_score.compute().item()
-        train_epoch_loss = train_loss / train_total
-        val_epoch_loss = val_loss / val_total
-        #train_acc = train_corrects / train_total
-        val_acc = val_corrects / val_total
-        train_epoch_losses.append(train_epoch_loss)
-        val_epoch_losses.append(val_epoch_loss)
+                    true_list.append(Y[scored].detach().cpu().numpy())
+                    preds_list.append(preds[scored].detach().cpu().numpy())
 
-        if (epoch == 0) or ((epoch + 1) % 5 == 0) or (epoch == (epochs - 1)):
-            print(f"Epoch: {epoch + 1}\n\tTrain Loss: {train_epoch_loss:.3f}\n\tVal Loss: {val_epoch_loss:.3f}\n\tVal MCC: {epoch_eval_metric:.3f}\n\tVal Acc: {val_acc:.3f}\n")
+            epoch_eval_metric = mcc_score.compute().item()
+            train_epoch_loss = train_loss / train_total
+            val_epoch_loss = val_loss / val_total
+            #train_acc = train_corrects / train_total
+            val_acc = val_corrects / val_total
+            train_epoch_losses.append(train_epoch_loss)
+            val_epoch_losses.append(val_epoch_loss)
 
-        if epoch_eval_metric > best_eval_metric:
-            best_eval_metric = epoch_eval_metric
-            best_epoch_acc = val_acc
-            best_true = np.concatenate(true_list)
-            best_preds = np.concatenate(preds_list)
-            best_epoch = epoch
-            torch.save(cnn_bilstm_tagger.state_dict(), state_dict_path)
+            if (epoch == 0) or ((epoch + 1) % 5 == 0) or (epoch == (epochs - 1)):
+                pbar.write(f"Epoch: {epoch + 1}\n\tTrain Loss: {train_epoch_loss:.3f}\n\tVal Loss: {val_epoch_loss:.3f}\n\tVal MCC: {epoch_eval_metric:.3f}\n\tVal Acc: {val_acc:.3f}\n")
 
-        scheduler.step(epoch_eval_metric)
+            if epoch_eval_metric > best_eval_metric:
+                best_eval_metric = epoch_eval_metric
+                best_epoch_acc = val_acc
+                best_true = np.concatenate(true_list)
+                best_preds = np.concatenate(preds_list)
+                best_epoch = epoch
+                torch.save(cnn_bilstm_tagger.state_dict(), state_dict_path)
+
+            scheduler.step(epoch_eval_metric)
 
     cnn_bilstm_tagger.load_state_dict(torch.load(state_dict_path, weights_only=True))
 
